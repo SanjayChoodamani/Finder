@@ -1,15 +1,14 @@
 const express = require('express');
-const mongoose = require('mongoose');
-const cors = require('cors');
+const path = require('path');
 const dotenv = require('dotenv');
-const userRoutes = require('./routes/userRoutes');
-const serviceRoutes = require('./routes/serviceRoutes');
-const bookingRoutes = require('./routes/bookingRoutes');
-const providerRoutes = require('./routes/serviceProviderRoutes');
-const errorHandler = require('./middleware/errorMiddleware');
+const cors = require('cors');
+const connectDB = require('./config/db');
 
 // Load env vars
 dotenv.config();
+
+// Connect to database
+connectDB();
 
 const app = express();
 
@@ -18,49 +17,24 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// MongoDB Connection
-mongoose.connect(process.env.MONGO_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-})
-.then(() => console.log('MongoDB Atlas Connected...'))
-.catch((err) => {
-    console.error('MongoDB Atlas connection error:', err);
-    process.exit(1);
-});
+// Serve static files
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-// Routes
-app.use('/api/users', userRoutes);
-app.use('/api/services', serviceRoutes);
-app.use('/api/bookings', bookingRoutes);
-app.use('/api/providers', providerRoutes);
+// Import routes
+const authRoutes = require('./routes/auth');
+const jobsRoutes = require('./routes/jobs');
 
-// Base route
-app.get('/', (req, res) => {
-    res.send('API is running...');
-});
+// Mount routes
+app.use('/api/auth', authRoutes);
+app.use('/api/jobs', jobsRoutes);
 
-// Error handler
-app.use(errorHandler);
-
-// Handle unhandled routes
-app.use((req, res) => {
-    res.status(404).json({ message: 'Route not found' });
+// Error handling middleware
+app.use((err, req, res, next) => {
+    console.error(err.stack);
+    res.status(500).json({ message: 'Something went wrong!' });
 });
 
 const PORT = process.env.PORT || 5000;
-
-const server = app.listen(PORT, () => {
-    console.log(`Server running in ${process.env.NODE_ENV} mode on port ${PORT}`);
+app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
 });
-
-// Handle unhandled promise rejections
-process.on('unhandledRejection', (err) => {
-    console.log('Unhandled Rejection! Shutting down...');
-    console.error(err);
-    server.close(() => {
-        process.exit(1);
-    });
-});
-
-module.exports = app;
