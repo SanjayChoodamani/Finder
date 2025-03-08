@@ -1,5 +1,6 @@
 import React from 'react';
 import { Eye, Clock } from 'lucide-react';
+import { format } from 'date-fns';
 
 const StatusBadge = ({ status }) => {
     const getStatusStyles = () => {
@@ -26,13 +27,7 @@ const StatusBadge = ({ status }) => {
 
 const BookingHistoryTable = ({ jobs, onRefresh }) => {
     const formatDate = (dateString) => {
-        return new Date(dateString).toLocaleDateString('en-US', {
-            year: 'numeric',
-            month: 'short',
-            day: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit'
-        });
+        return format(new Date(dateString), 'MMM dd, yyyy');
     };
 
     const formatCurrency = (amount) => {
@@ -40,6 +35,13 @@ const BookingHistoryTable = ({ jobs, onRefresh }) => {
             style: 'currency',
             currency: 'INR'
         }).format(amount);
+    };
+
+    // Helper function to format location
+    const formatLocation = (location) => {
+        if (!location || !location.coordinates) return 'N/A';
+        // Use the address instead of coordinates
+        return location.address || 'Location available';
     };
 
     return (
@@ -89,7 +91,7 @@ const BookingHistoryTable = ({ jobs, onRefresh }) => {
                                         {job.title}
                                     </div>
                                     <div className="text-sm text-gray-500">
-                                        {job.location}
+                                        {formatLocation(job.location)}
                                     </div>
                                 </td>
                                 <td className="px-6 py-4 whitespace-nowrap">

@@ -1,15 +1,26 @@
-// models/Worker.js
 const mongoose = require('mongoose');
 
-const locationSchema = new mongoose.Schema({
+const notificationSchema = new mongoose.Schema({
     type: {
         type: String,
-        enum: ['Point'],
+        required: true,
+        enum: ['new_job', 'job_update', 'payment', 'message']
+    },
+    message: {
+        type: String,
         required: true
     },
-    coordinates: {
-        type: [Number], // [longitude, latitude]
-        required: true
+    job: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Job'
+    },
+    isRead: {
+        type: Boolean,
+        default: false
+    },
+    createdAt: {
+        type: Date,
+        default: Date.now
     }
 });
 
@@ -19,66 +30,48 @@ const workerSchema = new mongoose.Schema({
         ref: 'User',
         required: true
     },
-    categories: [{
+    skills: [{
         type: String,
         required: true
     }],
-    location: {
-        type: locationSchema,
-        index: '2dsphere', // Enable geospatial queries
-        required: true
-    },
     serviceRadius: {
-        type: Number, // in kilometers
-        required: true,
-        default: 10
-    },
-    availability: {
-        type: String,
-        enum: ['available', 'busy', 'offline'],
-        default: 'available'
-    },
-    activeJobs: [{
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'Job'
-    }],
-    rating: {
         type: Number,
-        default: 0
+        default: 100 // in kilometers
     },
-    totalJobs: {
+    location: {
+        type: {
+            type: String,
+            enum: ['Point'],
+            default: 'Point'
+        },
+        coordinates: {
+            type: [Number], // [longitude, latitude]
+            required: true
+        }
+    },
+    notifications: [notificationSchema],
+    city: String,
+    rating: {
         type: Number,
         default: 0
     },
     completedJobs: {
         type: Number,
         default: 0
-    },
-    notifications: [{
-        type: {
-            type: String,
-            enum: ['new_job', 'job_update', 'location_reveal'],
-            required: true
-        },
-        job: {
-            type: mongoose.Schema.Types.ObjectId,
-            ref: 'Job'
-        },
-        message: String,
-        isRead: {
-            type: Boolean,
-            default: false
-        },
-        createdAt: {
-            type: Date,
-            default: Date.now
-        }
-    }]
-}, { timestamps: true });
+    }
+});
 
-// Add indexes
-workerSchema.index({ "location": "2dsphere" });
-workerSchema.index({ "categories": 1 });
+// Add geospatial index - this is critical for location queries
+workerSchema.index({ location: '2dsphere' });
 
-const Worker = mongoose.model('Worker', workerSchema);
-module.exports = Worker;
+// Add this pre-save middleware to ensure coordinates are numbers
+workerSchema.pre('save', function(next) {
+    if (this.location && this.location.coordinates) {
+        this.location.coordinates = this.location.coordinates.map(coord => 
+            typeof coord === 'string' ? parseFloat(coord) : coord
+        );
+    }
+    next();
+});
+
+module.exports = mongoose.model('Worker', workerSchema);

@@ -1,19 +1,124 @@
-import React, { useState } from 'react';
-import { X, Upload, Calendar, MapPin, FileText, DollarSign, Clock } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { X, Upload, MapPin, Search, Clock } from 'lucide-react';
+import { getCurrentLocation, getAddressFromCoordinates, isValidCoordinates } from '../../utils/location';
 
 const JobPostingModal = ({ isOpen, onClose, onSuccess }) => {
     const [formData, setFormData] = useState({
         title: '',
         description: '',
         location: '',
+        latitude: '',
+        longitude: '',
         budget: '',
         deadline: '',
-        timePreference: '',
+        timeStart: '',
+        timeEnd: '',
         category: '',
+        categorySearch: '', // For filtering categories
         images: []
     });
+    const [isLocating, setIsLocating] = useState(false);
     const [error, setError] = useState('');
     const [isLoading, setIsLoading] = useState(false);
+    const [categories, setCategories] = useState([]);
+    const [showCategoryDropdown, setShowCategoryDropdown] = useState(false);
+
+    // Fetch available categories on component mount
+    useEffect(() => {
+        fetchCategories();
+    }, []);
+
+    const fetchCategories = async () => {
+        try {
+            const token = localStorage.getItem('token');
+            if (!token) return;
+
+            const response = await fetch('http://localhost:5000/api/categories', {
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                setCategories(data);
+            }
+        } catch (err) {
+            console.error('Error fetching categories:', err);
+        }
+    };
+
+    useEffect(() => {
+        if (!formData.location || formData.location === 'Current Location' || isLocating) return;
+
+        const timeoutId = setTimeout(() => {
+            getLocationCoordinates(formData.location);
+        }, 1000);
+
+        return () => clearTimeout(timeoutId);
+    }, [formData.location]);
+
+    const handleCurrentLocation = async () => {
+        try {
+            setIsLocating(true);
+            setError('');
+
+            const position = await getCurrentLocation();
+            const { latitude, longitude } = position.coords;
+            const address = await getAddressFromCoordinates(latitude, longitude);
+
+            setFormData(prev => ({
+                ...prev,
+                location: address,
+                latitude: latitude.toString(),
+                longitude: longitude.toString()
+            }));
+        } catch (err) {
+            console.error('Location error:', err);
+            setError(err.message || 'Error getting current location. Please enter address manually.');
+        } finally {
+            setIsLocating(false);
+        }
+    };
+
+    const getLocationCoordinates = async (address) => {
+        try {
+            if (!address || address.trim().length < 3) return;
+            setIsLocating(true);
+            setError('');
+
+            const apiKey = import.meta.env.VITE_REACT_APP_GOOGLE_MAPS_API_KEY;
+            const response = await fetch(
+                `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(address)}&key=${apiKey}`
+            );
+
+            const data = await response.json();
+            if (data.status === 'OK' && data.results && data.results[0]) {
+                const { lat, lng } = data.results[0].geometry.location;
+                if (isValidCoordinates(lat, lng)) {
+                    setFormData(prev => ({
+                        ...prev,
+                        latitude: lat.toString(),
+                        longitude: lng.toString(),
+                        location: data.results[0].formatted_address
+                    }));
+                } else {
+                    throw new Error('Invalid coordinates received');
+                }
+            } else {
+                throw new Error(
+                    data.status === 'ZERO_RESULTS'
+                        ? 'No location found for this address'
+                        : 'Error getting location coordinates'
+                );
+            }
+        } catch (err) {
+            console.error('Geocoding error:', err);
+            setError(err.message || 'Error getting location coordinates');
+        } finally {
+            setIsLocating(false);
+        }
+    };
 
     const handleImageUpload = (e) => {
         const files = Array.from(e.target.files);
@@ -24,7 +129,7 @@ const JobPostingModal = ({ isOpen, onClose, onSuccess }) => {
 
         const validFiles = files.filter(file => {
             const isValid = file.type.startsWith('image/');
-            const isValidSize = file.size <= 10 * 1024 * 1024; // 10MB
+            const isValidSize = file.size <= 10 * 1024 * 1024;
             return isValid && isValidSize;
         });
 
@@ -51,6 +156,39 @@ const JobPostingModal = ({ isOpen, onClose, onSuccess }) => {
         });
     };
 
+    const handleCategorySearch = (e) => {
+        setFormData(prev => ({ ...prev, categorySearch: e.target.value }));
+        setShowCategoryDropdown(true);
+    };
+
+    const selectCategory = (category) => {
+        setFormData(prev => ({ 
+            ...prev, 
+            category: category,
+            categorySearch: category
+        }));
+        setShowCategoryDropdown(false);
+    };
+
+    const filteredCategories = formData.categorySearch
+        ? categories.filter(cat => 
+            cat.toLowerCase().includes(formData.categorySearch.toLowerCase()))
+        : categories;
+    
+    // Add common categories if they're not already in the list
+    const commonCategories = [
+        'plumbing', 'electrical', 'carpentry', 'painting', 
+        'cleaning', 'gardening', 'moving', 'appliance_repair', 
+        'hvac', 'roofing', 'other'
+    ];
+    
+    const allFilteredCategories = [...new Set([
+        ...filteredCategories,
+        ...commonCategories
+            .filter(cat => cat.includes(formData.categorySearch.toLowerCase()))
+            .filter(cat => !filteredCategories.includes(cat))
+    ])];
+
     const handleSubmit = async (e) => {
         e.preventDefault();
         setIsLoading(true);
@@ -62,19 +200,25 @@ const JobPostingModal = ({ isOpen, onClose, onSuccess }) => {
                 throw new Error('Authentication required');
             }
 
-            const formDataToSend = new FormData();
+            const lat = parseFloat(formData.latitude);
+            const lng = parseFloat(formData.longitude);
+            if (!lat || !lng || !isValidCoordinates(lat, lng)) {
+                throw new Error('Valid location coordinates are required');
+            }
 
-            // Append basic form fields
+            const formDataToSend = new FormData();
             formDataToSend.append('title', formData.title);
             formDataToSend.append('description', formData.description);
-            formDataToSend.append('location', formData.location);
+            formDataToSend.append('category', formData.category);
+            formDataToSend.append('address', formData.location);
+            formDataToSend.append('latitude', formData.latitude);
+            formDataToSend.append('longitude', formData.longitude);
             formDataToSend.append('budget', formData.budget);
             formDataToSend.append('deadline', formData.deadline);
-            formDataToSend.append('category', formData.category);
-            formDataToSend.append('timePreference', formData.timePreference);
+            formDataToSend.append('timeStart', formData.timeStart);
+            formDataToSend.append('timeEnd', formData.timeEnd);
 
-            // Append images
-            formData.images.forEach((img, index) => {
+            formData.images.forEach((img) => {
                 formDataToSend.append('images', img.file);
             });
 
@@ -86,35 +230,44 @@ const JobPostingModal = ({ isOpen, onClose, onSuccess }) => {
                 body: formDataToSend
             });
 
-            const data = await response.json();
-
-            if (response.ok) {
-                // Clear form and close modal
-                setFormData({
-                    title: '',
-                    description: '',
-                    location: '',
-                    budget: '',
-                    deadline: '',
-                    timePreference: '',
-                    category: '',
-                    images: []
-                });
-                onSuccess(data);
-                onClose();
-            } else {
-                setError(data.message || 'Failed to create job posting');
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.message || 'Failed to create job posting');
             }
+
+            const data = await response.json();
+            setFormData({
+                title: '',
+                description: '',
+                location: '',
+                latitude: '',
+                longitude: '',
+                budget: '',
+                deadline: '',
+                timeStart: '',
+                timeEnd: '',
+                category: '',
+                categorySearch: '',
+                images: []
+            });
+            onSuccess(data);
+            onClose();
         } catch (err) {
-            setError(err.message || 'An error occurred. Please try again.');
+            console.error('Job posting error:', err);
+            setError(err.message || 'An error occurred while posting the job');
         } finally {
             setIsLoading(false);
         }
     };
 
     const validateForm = () => {
-        const requiredFields = ['title', 'category', 'description', 'location', 'budget', 'deadline', 'timePreference'];
-        return requiredFields.every(field => formData[field]) && formData.budget > 0;
+        const requiredFields = [
+            'title', 'category', 'description', 'location',
+            'latitude', 'longitude', 'budget', 'deadline', 'timeStart', 'timeEnd'
+        ];
+        return requiredFields.every(field => formData[field]) &&
+            formData.budget > 0 &&
+            !isLocating;
     };
 
     if (!isOpen) return null;
@@ -153,7 +306,7 @@ const JobPostingModal = ({ isOpen, onClose, onSuccess }) => {
                             {/* Job Title */}
                             <div>
                                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                                    Job Title
+                                    Job Title <span className="text-xs text-gray-500">(What service do you need?)</span>
                                 </label>
                                 <input
                                     type="text"
@@ -165,41 +318,52 @@ const JobPostingModal = ({ isOpen, onClose, onSuccess }) => {
                                     maxLength={100}
                                 />
                             </div>
+                            
+                            {/* Category - Searchable */}
                             <div>
                                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                                    Category
+                                    Service Category <span className="text-xs text-gray-500">(Type to search or create new category)</span>
                                 </label>
-                                <select
-                                    value={formData.category}
-                                    onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-                                    className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#133E87]/20 focus:border-[#133E87]"
-                                    required
-                                >
-                                    <option value="">Select a category</option>
-                                    <option value="plumbing">Plumbing</option>
-                                    <option value="electrical">Electrical</option>
-                                    <option value="carpentry">Carpentry</option>
-                                    <option value="painting">Painting</option>
-                                    <option value="cleaning">Cleaning</option>
-                                    <option value="gardening">Gardening</option>
-                                    <option value="moving">Moving</option>
-                                    <option value="appliance_repair">Appliance Repair</option>
-                                    <option value="hvac">HVAC</option>
-                                    <option value="roofing">Roofing</option>
-                                    <option value="other">Other</option>
-                                </select>
+                                <div className="relative">
+                                    <div className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
+                                        <Search size={18} />
+                                    </div>
+                                    <input
+                                        type="text"
+                                        value={formData.categorySearch}
+                                        onChange={handleCategorySearch}
+                                        onFocus={() => setShowCategoryDropdown(true)}
+                                        className="w-full p-3 pl-10 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#133E87]/20 focus:border-[#133E87]"
+                                        placeholder="Search or enter category..."
+                                        required
+                                    />
+                                    
+                                    {showCategoryDropdown && allFilteredCategories.length > 0 && (
+                                        <div className="absolute z-10 mt-1 w-full bg-white border border-gray-300 rounded-md shadow-lg max-h-60 overflow-auto">
+                                            {allFilteredCategories.map((category, index) => (
+                                                <div 
+                                                    key={index}
+                                                    className="px-4 py-2 hover:bg-gray-100 cursor-pointer"
+                                                    onClick={() => selectCategory(category)}
+                                                >
+                                                    {category}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
                             </div>
 
                             {/* Description */}
                             <div>
                                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                                    Description
+                                    Job Description <span className="text-xs text-gray-500">(Provide details about the work required)</span>
                                 </label>
                                 <textarea
                                     value={formData.description}
                                     onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                                     className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#133E87]/20 focus:border-[#133E87] min-h-[120px]"
-                                    placeholder="Describe the job in detail..."
+                                    placeholder="Describe the job in detail including any specific requirements..."
                                     required
                                     maxLength={1000}
                                 />
@@ -208,22 +372,44 @@ const JobPostingModal = ({ isOpen, onClose, onSuccess }) => {
                             {/* Location */}
                             <div>
                                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                                    Location
+                                    Service Location <span className="text-xs text-gray-500">(Where the service is needed)</span>
                                 </label>
-                                <input
-                                    type="text"
-                                    value={formData.location}
-                                    onChange={(e) => setFormData({ ...formData, location: e.target.value })}
-                                    className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#133E87]/20 focus:border-[#133E87]"
-                                    placeholder="Enter job location"
-                                    required
-                                />
+                                <div className="relative">
+                                    <input
+                                        type="text"
+                                        value={formData.location}
+                                        onChange={(e) => setFormData({ ...formData, location: e.target.value })}
+                                        className="w-full p-3 pl-10 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#133E87]/20 focus:border-[#133E87]"
+                                        placeholder="Enter address or use current location"
+                                        required
+                                    />
+                                    <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
+                                    <button
+                                        type="button"
+                                        onClick={handleCurrentLocation}
+                                        className="absolute right-3 top-1/2 -translate-y-1/2 text-[#133E87] text-sm hover:underline"
+                                    >
+                                        Use Current Location
+                                    </button>
+                                </div>
+                                {isLocating && (
+                                    <div className="mt-2 flex items-center text-sm text-gray-500">
+                                        <div className="animate-spin rounded-full h-4 w-4 border-2 border-[#133E87] border-t-transparent mr-2"></div>
+                                        Verifying location...
+                                    </div>
+                                )}
+                                {formData.latitude && formData.longitude && !isLocating && (
+                                    <p className="mt-2 text-sm text-green-600 flex items-center">
+                                        <MapPin className="mr-1" size={16} />
+                                        Location verified
+                                    </p>
+                                )}
                             </div>
 
                             {/* Budget */}
                             <div>
                                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                                    Budget (₹)
+                                    Budget (₹) <span className="text-xs text-gray-500">(How much are you willing to pay?)</span>
                                 </label>
                                 <input
                                     type="number"
@@ -239,7 +425,7 @@ const JobPostingModal = ({ isOpen, onClose, onSuccess }) => {
                             {/* Deadline */}
                             <div>
                                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                                    Deadline
+                                    Service Date <span className="text-xs text-gray-500">(When do you need this completed by?)</span>
                                 </label>
                                 <input
                                     type="date"
@@ -251,28 +437,48 @@ const JobPostingModal = ({ isOpen, onClose, onSuccess }) => {
                                 />
                             </div>
 
-                            {/* Time Preference */}
-                            <div>
-                                <label className="block text-sm font-medium text-gray-700 mb-2">
-                                    Preferred Time
-                                </label>
-                                <select
-                                    value={formData.timePreference}
-                                    onChange={(e) => setFormData({ ...formData, timePreference: e.target.value })}
-                                    className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#133E87]/20 focus:border-[#133E87]"
-                                    required
-                                >
-                                    <option value="">Select time preference</option>
-                                    <option value="morning">Morning (8 AM - 12 PM)</option>
-                                    <option value="afternoon">Afternoon (12 PM - 4 PM)</option>
-                                    <option value="evening">Evening (4 PM - 8 PM)</option>
-                                </select>
+                            {/* Time Duration */}
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                                        Start Time <span className="text-xs text-gray-500">(Service begins at)</span>
+                                    </label>
+                                    <div className="relative">
+                                        <div className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
+                                            <Clock size={18} />
+                                        </div>
+                                        <input
+                                            type="time"
+                                            value={formData.timeStart}
+                                            onChange={(e) => setFormData({ ...formData, timeStart: e.target.value })}
+                                            className="w-full p-3 pl-10 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#133E87]/20 focus:border-[#133E87]"
+                                            required
+                                        />
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                                        End Time <span className="text-xs text-gray-500">(Service ends by)</span>
+                                    </label>
+                                    <div className="relative">
+                                        <div className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
+                                            <Clock size={18} />
+                                        </div>
+                                        <input
+                                            type="time"
+                                            value={formData.timeEnd}
+                                            onChange={(e) => setFormData({ ...formData, timeEnd: e.target.value })}
+                                            className="w-full p-3 pl-10 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#133E87]/20 focus:border-[#133E87]"
+                                            required
+                                        />
+                                    </div>
+                                </div>
                             </div>
 
                             {/* Image Upload */}
                             <div>
                                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                                    Upload Images (Maximum 5)
+                                    Supporting Images <span className="text-xs text-gray-500">(Upload up to 5 images to help explain the job)</span>
                                 </label>
                                 <div className="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-gray-300 border-dashed rounded-lg">
                                     <div className="space-y-1 text-center">

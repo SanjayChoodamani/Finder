@@ -1,13 +1,12 @@
 // components/dashboard/WorkerDashboard.js
 import React, { useState, useEffect, useRef } from 'react';
-import { Bell, LogOut, Settings, User, X } from 'lucide-react';
-import AvailableJobsList from './AvailableJobsList';
+import { Bell, LogOut, Settings, User, X, MapPin } from 'lucide-react';
 import NotificationPanel from './NotificationPanel';
 import ActiveJobsList from './ActiveJobsList';
+import JobCard from './JobCard';
 
 const WorkerDashboard = () => {
     const [user, setUser] = useState(null);
-    const [availableJobs, setAvailableJobs] = useState([]);
     const [notifications, setNotifications] = useState([]);
     const [activeJobs, setActiveJobs] = useState([]);
     const [showNotifications, setShowNotifications] = useState(false);
@@ -15,13 +14,22 @@ const WorkerDashboard = () => {
     const [error, setError] = useState(null);
     const [dropdownOpen, setDropdownOpen] = useState(false);
     const dropdownRef = useRef(null);
+    const [nearbyJobs, setNearbyJobs] = useState([]);
+    const [pushEnabled, setPushEnabled] = useState(false);
+
+    // Add loading states
+    const [dashboardLoading, setDashboardLoading] = useState({
+        profile: true,
+        nearbyJobs: true,
+        activeJobs: true,
+        notifications: true
+    });
 
     useEffect(() => {
-        fetchUserData();
-        fetchAvailableJobs();
-        fetchNotifications();
-        fetchActiveJobs();
-        setupLocationUpdates();
+        // Initialize everything at once
+        initializeDashboard();
+
+        // Set up click outside handler for dropdown
         const handleClickOutside = (event) => {
             if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
                 setDropdownOpen(false);
@@ -32,36 +40,97 @@ const WorkerDashboard = () => {
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, []);
 
-    const setupLocationUpdates = () => {
-        if ("geolocation" in navigator) {
-            navigator.geolocation.watchPosition(
-                async (position) => {
-                    try {
-                        const token = localStorage.getItem('token');
-                        await fetch('http://localhost:5000/api/worker/location', {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json',
-                                'Authorization': `Bearer ${token}`
-                            },
-                            body: JSON.stringify({
-                                longitude: position.coords.longitude,
-                                latitude: position.coords.latitude
-                            })
-                        });
-                    } catch (error) {
-                        console.error('Error updating location:', error);
-                    }
-                },
-                (error) => {
-                    console.error('Error getting location:', error);
-                },
-                {
-                    enableHighAccuracy: true,
-                    maximumAge: 30000,
-                    timeout: 27000
+    const initializeDashboard = async () => {
+        try {
+            setIsLoading(true);
+            setError(null);
+
+            // First fetch essential user data
+            await fetchUserData();
+
+            // Then fetch other data in parallel, but handle failures gracefully
+            const results = await Promise.allSettled([
+                fetchNotifications(),
+                fetchNearbyJobs(),
+                fetchActiveJobs()
+            ]);
+
+            // Log any rejections but don't fail the dashboard
+            results.forEach((result, index) => {
+                if (result.status === 'rejected') {
+                    const endpoints = ['notifications', 'nearby jobs', 'active jobs'];
+                    console.warn(`Failed to fetch ${endpoints[index]}:`, result.reason);
                 }
-            );
+            });
+
+            // Ensure worker profile exists
+            try {
+                const token = localStorage.getItem('token');
+                await fetch('http://localhost:5000/api/worker/ensure-profile', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify({ skills: ['general'] })
+                });
+            } catch (err) {
+                console.warn('Error ensuring worker profile:', err);
+            }
+            
+            // Try setting up push notifications but don't block if it fails
+            try {
+                await setupPushNotifications();
+            } catch (pushError) {
+                console.warn('Push notification setup failed:', pushError);
+                // Non-critical
+            }
+        } catch (error) {
+            console.error('Error initializing dashboard:', error);
+            setError('Failed to load dashboard data. Please try again later.');
+        } finally {
+            setIsLoading(false);
+            setDashboardLoading({
+                profile: false,
+                nearbyJobs: false,
+                activeJobs: false,
+                notifications: false
+            });
+        }
+    };
+
+    const checkLocationAvailability = async (jobId) => {
+        try {
+            const token = localStorage.getItem('token');
+            const response = await fetch(`http://localhost:5000/api/worker/job-location/${jobId}`, {
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+
+            const data = await response.json();
+
+            if (response.ok) {
+                // Location is available
+                return {
+                    available: true,
+                    location: data.exactLocation,
+                    address: data.exactAddress
+                };
+            } else {
+                // Location not yet available
+                return {
+                    available: false,
+                    message: data.message,
+                    revealTime: data.revealTime ? new Date(data.revealTime) : null
+                };
+            }
+        } catch (error) {
+            console.error('Error checking location availability:', error);
+            return {
+                available: false,
+                message: 'Error checking location availability'
+            };
         }
     };
 
@@ -76,26 +145,13 @@ const WorkerDashboard = () => {
             if (response.ok) {
                 const userData = await response.json();
                 setUser(userData);
+            } else {
+                throw new Error('Failed to fetch profile data');
             }
         } catch (error) {
-            setError('Failed to load user data');
-        }
-    };
-
-    const fetchAvailableJobs = async () => {
-        try {
-            const token = localStorage.getItem('token');
-            const response = await fetch('http://localhost:5000/api/worker/available-jobs', {
-                headers: {
-                    'Authorization': `Bearer ${token}`
-                }
-            });
-            if (response.ok) {
-                const data = await response.json();
-                setAvailableJobs(data);
-            }
-        } catch (error) {
-            setError('Failed to load available jobs');
+            console.error('Error fetching user data:', error);
+        } finally {
+            setDashboardLoading(prev => ({ ...prev, profile: false }));
         }
     };
 
@@ -107,12 +163,27 @@ const WorkerDashboard = () => {
                     'Authorization': `Bearer ${token}`
                 }
             });
-            if (response.ok) {
-                const data = await response.json();
-                setNotifications(data);
+
+            // If response is not ok, just set empty notifications instead of throwing
+            if (!response.ok) {
+                console.log('No notifications found or worker profile not set up');
+                setNotifications([]);
+                return;
+            }
+
+            const result = await response.json();
+
+            if (result.success) {
+                setNotifications(result.data || []);
+            } else {
+                setNotifications([]);
             }
         } catch (error) {
             console.error('Error fetching notifications:', error);
+            // Don't set error state here, just set empty notifications
+            setNotifications([]);
+        } finally {
+            setDashboardLoading(prev => ({ ...prev, notifications: false }));
         }
     };
 
@@ -127,9 +198,173 @@ const WorkerDashboard = () => {
             if (response.ok) {
                 const data = await response.json();
                 setActiveJobs(data);
+            } else {
+                throw new Error('Failed to fetch active jobs');
             }
         } catch (error) {
             console.error('Error fetching active jobs:', error);
+        } finally {
+            setDashboardLoading(prev => ({ ...prev, activeJobs: false }));
+            setIsLoading(false);
+        }
+    };
+
+    const fetchNearbyJobs = async () => {
+        try {
+            setDashboardLoading(prev => ({ ...prev, nearbyJobs: true }));
+            const token = localStorage.getItem('token');
+
+            console.log('Fetching nearby jobs...');
+
+            const response = await fetch('http://localhost:5000/api/jobs/nearby', {
+                method: 'GET',
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                }
+            });
+
+            const data = await response.json();
+
+            console.log('Nearby jobs response:', data);
+
+            if (Array.isArray(data)) {
+                setNearbyJobs(data);
+                console.log(`Found ${data.length} nearby jobs`);
+
+                // Log each job for debugging
+                data.forEach((job, index) => {
+                    console.log(`Job ${index + 1}:`, {
+                        id: job._id,
+                        title: job.title,
+                        category: job.category,
+                        location: job.approximateLocation || 'No location'
+                    });
+                });
+            } else {
+                console.error('Invalid response format for nearby jobs');
+                setNearbyJobs([]);
+            }
+        } catch (error) {
+            console.error('Error fetching nearby jobs:', error);
+            // Don't set error state, just set empty jobs
+            setNearbyJobs([]);
+        } finally {
+            setDashboardLoading(prev => ({ ...prev, nearbyJobs: false }));
+        }
+    };
+
+    useEffect(() => {
+        // Log nearby jobs for debugging
+        if (nearbyJobs.length > 0) {
+            console.log(`Found ${nearbyJobs.length} nearby jobs`);
+            nearbyJobs.forEach((job, index) => {
+                console.log(`Job ${index + 1}:`, {
+                    id: job._id,
+                    title: job.title,
+                    category: job.category,
+                    approxLocation: job.approximateLocation || 'No approximate location'
+                });
+            });
+        } else if (!dashboardLoading.nearbyJobs) {
+            console.log('No nearby jobs found');
+        }
+    }, [nearbyJobs, dashboardLoading.nearbyJobs]);
+
+    const setupPushNotifications = async () => {
+        try {
+            if (!('Notification' in window)) {
+                console.log('This browser does not support notifications');
+                return false;
+            }
+
+            const permission = await Notification.requestPermission();
+            if (permission !== 'granted') {
+                console.log('Notification permission denied');
+                return false;
+            }
+
+            if (!navigator.serviceWorker) {
+                console.log('Service Worker not supported');
+                return false;
+            }
+
+            // Check if VAPID key exists and use a fallback if not
+            const vapidKey = import.meta.env.VITE_REACT_APP_VAPID_PUBLIC_KEY;
+            if (!vapidKey) {
+                console.warn('VAPID public key not found in environment variables');
+                // Just return false instead of trying to create a subscription
+                return false;
+            }
+
+            const registration = await navigator.serviceWorker.ready;
+            const subscription = await registration.pushManager.subscribe({
+                userVisibleOnly: true,
+                applicationServerKey: vapidKey
+            });
+
+            // Send subscription to server
+            const token = localStorage.getItem('token');
+            const response = await fetch('http://localhost:5000/api/worker/push-subscription', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({ subscription })
+            });
+
+            if (response.ok) {
+                setPushEnabled(true);
+                return true;
+            }
+            return false;
+        } catch (err) {
+            console.error('Error setting up push notifications:', err);
+            return false;
+        }
+    };
+
+    const handleAcceptJob = async (jobId) => {
+        try {
+            setIsLoading(true);
+            const token = localStorage.getItem('token');
+
+            console.log(`Accepting job ${jobId}...`);
+
+            const response = await fetch(`http://localhost:5000/api/jobs/${jobId}/accept`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+
+            const responseText = await response.text();
+            console.log('Response text:', responseText);
+
+            let data;
+            try {
+                data = JSON.parse(responseText);
+            } catch (e) {
+                throw new Error(`Invalid JSON response: ${responseText}`);
+            }
+
+            if (!response.ok) {
+                throw new Error(data.message || 'Failed to accept job');
+            }
+
+            // Refresh all job lists to ensure UI is updated
+            await Promise.all([
+                fetchNearbyJobs(),
+                fetchActiveJobs()
+            ]);
+
+            // Show confirmation
+            alert('Job accepted successfully! Check your active jobs.');
+        } catch (err) {
+            console.error('Error accepting job:', err);
+            alert(`Error: ${err.message}`);
         } finally {
             setIsLoading(false);
         }
@@ -155,6 +390,60 @@ const WorkerDashboard = () => {
             console.error('Error marking notification as read:', error);
         }
     };
+
+    // Loading component
+    const LoadingSpinner = () => (
+        <div className="flex justify-center items-center p-8">
+            <div className="animate-spin rounded-full h-8 w-8 border-2 border-[#133E87] border-t-transparent"></div>
+        </div>
+    );
+
+    // Empty state component
+    const EmptyState = ({ title, message }) => (
+        <div className="text-center py-8">
+            <MapPin className="mx-auto h-12 w-12 text-gray-400" />
+            <h3 className="mt-2 text-sm font-medium text-gray-900">{title}</h3>
+            <p className="mt-1 text-sm text-gray-500">{message}</p>
+        </div>
+    );
+
+    // Update the render method to handle loading states
+    if (Object.values(dashboardLoading).every(Boolean)) {
+        return (
+            <div className="min-h-screen flex justify-center items-center">
+                <LoadingSpinner />
+            </div>
+        );
+    }
+
+    if (isLoading) return <div>Loading...</div>;
+    if (error) {
+        return (
+            <div className="min-h-screen flex justify-center items-center bg-gray-50">
+                <div className="bg-white rounded-lg shadow-md p-8 max-w-md w-full">
+                    <h2 className="text-2xl font-bold text-red-600 mb-4">Dashboard Error</h2>
+                    <p className="text-gray-700 mb-6">{error}</p>
+                    <div className="flex space-x-4">
+                        <button
+                            onClick={() => window.location.reload()}
+                            className="bg-[#133E87] text-white py-2 px-4 rounded-lg hover:bg-[#133E87]/90 transition-colors"
+                        >
+                            Retry Loading
+                        </button>
+                        <button
+                            onClick={() => {
+                                localStorage.removeItem('token');
+                                window.location.href = '/';
+                            }}
+                            className="border border-gray-300 text-gray-700 py-2 px-4 rounded-lg hover:bg-gray-50 transition-colors"
+                        >
+                            Logout
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="min-h-screen bg-gray-50">
@@ -266,23 +555,37 @@ const WorkerDashboard = () => {
                     </div>
                 </div>
 
-                {/* Main Content Grid */}
+                {/* Jobs Sections */}
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                    {/* Available Jobs Section */}
+                    {/* Available Jobs */}
                     <div className="lg:col-span-2">
                         <div className="bg-white rounded-lg shadow-md">
                             <div className="p-6 border-b border-gray-200">
                                 <h2 className="text-xl font-semibold text-gray-800">Available Jobs</h2>
-                                <p className="text-sm text-gray-600 mt-1">
-                                    Jobs matching your skills in your area
-                                </p>
                             </div>
                             <div className="p-6">
-                                <AvailableJobsList
-                                    jobs={availableJobs}
-                                    onAccept={fetchActiveJobs}
-                                    isLoading={isLoading}
-                                />
+                                {dashboardLoading.nearbyJobs ? (
+                                    <LoadingSpinner />
+                                ) : nearbyJobs.length > 0 ? (
+                                    <div className="grid gap-4">
+                                        {nearbyJobs.map(job => (
+                                            <div key={job._id}>
+                                                <JobCard job={job} />
+                                                <button
+                                                    onClick={() => handleAcceptJob(job._id)}
+                                                    className="mt-2 w-full bg-[#133E87] text-white py-2 px-4 rounded-lg hover:bg-[#133E87]/90 transition-colors"
+                                                >
+                                                    Accept Job
+                                                </button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <EmptyState
+                                        title="No jobs available"
+                                        message="There are currently no jobs in your area. Check back later!"
+                                    />
+                                )}
                             </div>
                         </div>
 
@@ -295,14 +598,15 @@ const WorkerDashboard = () => {
                                 <ActiveJobsList
                                     jobs={activeJobs}
                                     onStatusUpdate={fetchActiveJobs}
+                                    checkLocationAvailability={checkLocationAvailability}
                                 />
                             </div>
                         </div>
                     </div>
 
-                    {/* Notifications Side Panel */}
+                    {/* Notifications Panel */}
                     <div
-                        className={`fixed inset-y-0 right-0 w-96 bg-white shadow-lg transform transition-all duration-300 ease-in-out z-10  ${showNotifications ? 'translate-x-0' : 'translate-x-full'} lg:relative lg:w-auto lg:transform-none lg:translate-x-0`}
+                        className={`fixed inset-y-0 right-0 w-96 bg-white shadow-lg transform transition-all duration-300 ease-in-out z-10 ${showNotifications ? 'translate-x-0' : 'translate-x-full'} lg:relative lg:w-auto lg:transform-none lg:translate-x-0`}
                     >
                         {/* Overlay for mobile */}
                         {showNotifications && (
@@ -334,12 +638,53 @@ const WorkerDashboard = () => {
                         </div>
                     </div>
                 </div>
+
+                {/* Nearby Jobs Section */}
+                <div className="p-6">
+                    <div className="mb-6 flex justify-between items-center">
+                        <h1 className="text-2xl font-bold text-gray-800">Available Jobs Nearby</h1>
+                        <div className="flex items-center gap-2">
+                            <Bell
+                                className={pushEnabled ? 'text-green-500' : 'text-gray-400'}
+                                size={20}
+                            />
+                            <span className="text-sm text-gray-600">
+                                {pushEnabled ? 'Notifications enabled' : (
+                                    <button
+                                        onClick={setupPushNotifications}
+                                        className="text-[#133E87] hover:underline"
+                                    >
+                                        Enable notifications
+                                    </button>
+                                )}
+                            </span>
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                        {nearbyJobs.map(job => (
+                            <div key={job._id} className="relative">
+                                <JobCard job={job} />
+                                <button
+                                    onClick={() => handleAcceptJob(job._id)}
+                                    className="mt-4 w-full bg-[#133E87] text-white py-2 px-4 rounded-lg hover:bg-[#133E87]/90 transition-colors"
+                                >
+                                    Accept Job
+                                </button>
+                            </div>
+                        ))}
+                    </div>
+
+                    {nearbyJobs.length === 0 && (
+                        <div className="text-center py-12">
+                            <MapPin className="mx-auto h-12 w-12 text-gray-400" />
+                            <p className="mt-4 text-gray-600">No jobs available in your area</p>
+                        </div>
+                    )}
+                </div>
             </div>
         </div>
     );
 };
 
 export default WorkerDashboard;
-
-
-

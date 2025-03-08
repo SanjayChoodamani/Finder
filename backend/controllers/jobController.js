@@ -1,18 +1,15 @@
-const express = require('express');
-const mongoose = require('mongoose');
-const router = express.Router();
-const auth = require('../middleware/auth');
-const upload = require('../middleware/upload');
 const Job = require('../models/Job');
-const User = require('../models/User'); 
-const Worker = require('../models/Worker'); 
+const User = require('../models/User');
+const Worker = require('../models/Worker');
+const ErrorResponse = require('../utils/errorResponse');
 const { sendNotificationToNearbyWorkers } = require('../utils/notifications');
+const mongoose = require('mongoose');
 
 // Create a new job
-router.post('/create', auth, upload.array('images', 5), async (req, res) => {
+exports.createJob = async (req, res, next) => {
     try {
         if (req.user.userType !== 'client') {
-            return res.status(403).json({ message: 'Only clients can post jobs' });
+            return next(new ErrorResponse('Only clients can create jobs', 403));
         }
 
         const {
@@ -39,7 +36,7 @@ router.post('/create', auth, upload.array('images', 5), async (req, res) => {
 
         // Validate coordinates
         if (!location.coordinates[0] || !location.coordinates[1]) {
-            return res.status(400).json({ message: 'Invalid coordinates' });
+            return next(new ErrorResponse('Invalid coordinates', 400));
         }
 
         const jobData = {
@@ -60,19 +57,19 @@ router.post('/create', auth, upload.array('images', 5), async (req, res) => {
         await job.save();
 
         // Send notifications to nearby workers
-        console.log('Sending notifications for new job:', job._id);
         await sendNotificationToNearbyWorkers(job);
-        console.log('Notifications sent successfully');
 
-        res.status(201).json(job);
+        res.status(201).json({
+            success: true,
+            data: job
+        });
     } catch (error) {
-        console.error('Error creating job:', error);
-        res.status(400).json({ message: error.message });
+        next(new ErrorResponse(error.message, 400));
     }
-});
+};
 
-// Get all available categories
-router.get('/categories', auth, async (req, res) => {
+// Get all categories
+exports.getCategories = async (req, res, next) => {
     try {
         // Get unique categories from workers' skills
         const workers = await Worker.find({});
@@ -91,17 +88,17 @@ router.get('/categories', auth, async (req, res) => {
         
         defaultCategories.forEach(cat => categories.add(cat));
         
-        res.json(Array.from(categories));
+        res.status(200).json(Array.from(categories));
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        next(new ErrorResponse(error.message, 500));
     }
-});
+};
 
 // Get available jobs for workers
-router.get('/available', auth, async (req, res) => {
+exports.getAvailableJobs = async (req, res, next) => {
     try {
         if (req.user.userType !== 'worker') {
-            return res.status(403).json({ message: 'Access denied' });
+            return next(new ErrorResponse('Access denied', 403));
         }
 
         const jobs = await Job.find({
@@ -109,132 +106,126 @@ router.get('/available', auth, async (req, res) => {
             worker: null
         })
         .populate('user', 'name phone')
-        .select('title description category address budget deadline timePreference images createdAt status')
+        .select('title description category address budget deadline timeStart timeEnd images createdAt status')
         .sort('-createdAt');
 
-        res.json(jobs);
+        res.status(200).json(jobs);
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        next(new ErrorResponse(error.message, 500));
     }
-});
+};
 
-// Get nearby jobs for workers - redirect to worker route for consistency
-router.get('/nearby-jobs', auth, async (req, res) => {
+// Get nearby jobs for workers
+exports.getNearbyJobs = async (req, res, next) => {
     try {
-        if (req.user.userType !== 'worker') {
-            return res.status(403).json({ 
-                success: false,
-                message: 'Only workers can access nearby jobs' 
-            });
-        }
-
-        // Redirect to the worker route
-        res.redirect(307, '/api/worker/nearby-jobs');
+        // Redirect to worker route
+        return res.redirect(307, '/api/worker/nearby-jobs');
     } catch (error) {
-        console.error('Error in job nearby redirect:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Failed to process request',
-            error: error.message
-        });
+        return next(new ErrorResponse('Error fetching nearby jobs', 500));
     }
-});
+};
 
 // Accept a job
-router.post('/:id/accept', auth, async (req, res) => {
+exports.acceptJob = async (req, res, next) => {
     try {
         if (req.user.userType !== 'worker') {
-            return res.status(403).json({ message: 'Only workers can accept jobs' });
+            return next(new ErrorResponse('Only workers can accept jobs', 403));
         }
 
         const job = await Job.findById(req.params.id);
         
         if (!job) {
-            return res.status(404).json({ message: 'Job not found' });
+            return next(new ErrorResponse('Job not found', 404));
         }
 
         if (job.status !== 'pending' || job.worker) {
-            return res.status(400).json({ message: 'Job is no longer available' });
+            return next(new ErrorResponse('Job is no longer available', 400));
         }
 
         job.worker = req.user._id;
         job.status = 'in progress';
         await job.save();
 
-        res.json(job);
+        res.status(200).json({
+            success: true,
+            data: job
+        });
     } catch (error) {
-        res.status(400).json({ message: error.message });
+        next(new ErrorResponse(error.message, 400));
     }
-});
+};
 
-// Get user's jobs
-router.get('/my-posts', auth, async (req, res) => {
+// Get user's jobs (client)
+exports.getMyPosts = async (req, res, next) => {
     try {
         const jobs = await Job.find({ user: req.user._id })
             .populate('worker', 'name phone email')
             .sort({ createdAt: -1 });
         
-        res.json(jobs);
+        res.status(200).json(jobs);
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        next(new ErrorResponse(error.message, 500));
     }
-});
+};
 
 // Get worker's assigned jobs
-router.get('/my-assignments', auth, async (req, res) => {
+exports.getMyAssignments = async (req, res, next) => {
     try {
         if (req.user.userType !== 'worker') {
-            return res.status(403).json({ message: 'Access denied' });
+            return next(new ErrorResponse('Access denied', 403));
         }
 
         const jobs = await Job.find({ worker: req.user._id })
             .populate('user', 'name phone email')
             .sort({ createdAt: -1 });
         
-        res.json(jobs);
+        res.status(200).json(jobs);
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        next(new ErrorResponse(error.message, 500));
     }
-});
+};
 
 // Get job details
-router.get('/:id', auth, async (req, res) => {
+exports.getJobById = async (req, res, next) => {
     try {
         const job = await Job.findById(req.params.id)
             .populate('user', 'name email phone')
             .populate('worker', 'name email phone rating');
 
         if (!job) {
-            return res.status(404).json({ message: 'Job not found' });
+            return next(new ErrorResponse('Job not found', 404));
         }
 
-        res.json(job);
+        res.status(200).json({
+            success: true,
+            data: job
+        });
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        next(new ErrorResponse(error.message, 500));
     }
-});
+};
 
 // Update job status
-router.patch('/:id/status', auth, async (req, res) => {
+exports.updateJobStatus = async (req, res, next) => {
     try {
         const { status } = req.body;
         const job = await Job.findById(req.params.id);
 
         if (!job) {
-            return res.status(404).json({ message: 'Job not found' });
+            return next(new ErrorResponse('Job not found', 404));
         }
 
         // Verify authorization
         if (job.user.toString() !== req.user._id.toString() && 
             (!job.worker || job.worker.toString() !== req.user._id.toString())) {
-            return res.status(403).json({ message: 'Not authorized' });
+            return next(new ErrorResponse('Not authorized', 403));
         }
 
         job.status = status;
         if (status === 'completed') {
             job.completedAt = new Date();
             
-            // Update worker stats
+            // Update worker stats if there is an assigned worker
             if (job.worker) {
                 await User.findByIdAndUpdate(job.worker, {
                     $inc: { completedJobs: 1 }
@@ -243,29 +234,32 @@ router.patch('/:id/status', auth, async (req, res) => {
         }
 
         await job.save();
-        res.json(job);
+        res.status(200).json({
+            success: true,
+            data: job
+        });
     } catch (error) {
-        res.status(400).json({ message: error.message });
+        next(new ErrorResponse(error.message, 400));
     }
-});
+};
 
 // Add review and rating
-router.post('/:id/review', auth, async (req, res) => {
+exports.addReview = async (req, res, next) => {
     try {
         const { rating, review } = req.body;
         const job = await Job.findById(req.params.id);
 
         if (!job) {
-            return res.status(404).json({ message: 'Job not found' });
+            return next(new ErrorResponse('Job not found', 404));
         }
 
         // Only job poster can add review
         if (job.user.toString() !== req.user._id.toString()) {
-            return res.status(403).json({ message: 'Not authorized' });
+            return next(new ErrorResponse('Not authorized', 403));
         }
 
         if (job.status !== 'completed') {
-            return res.status(400).json({ message: 'Can only review completed jobs' });
+            return next(new ErrorResponse('Can only review completed jobs', 400));
         }
 
         job.rating = rating;
@@ -284,24 +278,11 @@ router.post('/:id/review', auth, async (req, res) => {
             rating: averageRating
         });
 
-        res.json(job);
-    } catch (error) {
-        res.status(400).json({ message: error.message });
-    }
-});
-
-// Get latest job timestamp for efficient polling
-router.get('/latest-timestamp', auth, async (req, res) => {
-    try {
-        const latestJob = await Job.findOne({})
-            .sort({ createdAt: -1 })
-            .select('createdAt');
-        
-        res.json({ 
-            timestamp: latestJob ? latestJob.createdAt : new Date(0) 
+        res.status(200).json({
+            success: true,
+            data: job
         });
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        next(new ErrorResponse(error.message, 400));
     }
-});
-module.exports = router;
+};
