@@ -197,10 +197,13 @@ router.post('/ensure-profile', auth, isWorker, async (req, res) => {
                 [parseFloat(longitude), parseFloat(latitude)] : 
                 [77.2090, 28.6139]; // Default Delhi coordinates
                 
+            // Normalize skills to lowercase before saving
+            const normalizedSkills = skills ? skills.map(skill => skill.toLowerCase().trim()) : ['general'];
+
             worker = await Worker.create({
                 user: req.user._id,
-                skills: skills || ['general'],
-                categories: skills || ['general'], // Add categories matching skills
+                skills: normalizedSkills,
+                categories: normalizedSkills, // Will be processed by pre-save hook in Worker model
                 experience: 0,
                 serviceRadius: 50, // Increased radius to see more jobs
                 location: {
@@ -230,14 +233,21 @@ router.put('/profile', auth, isWorker, async (req, res) => {
     try {
         const { skills, serviceRadius, city } = req.body;
 
+        // Normalize skills to lowercase before saving
+        const normalizedSkills = skills ? skills.map(skill => skill.toLowerCase().trim()) : ['general'];
+
+        // Update worker object
+        const updateObj = {
+            skills: normalizedSkills,
+            categories: normalizedSkills, // Will be processed by pre-save hook in Worker model
+            serviceRadius: serviceRadius || undefined,
+            city: city || undefined
+        };
+
         const worker = await Worker.findOneAndUpdate(
             { user: req.user._id },
             {
-                $set: {
-                    skills: skills || undefined,
-                    serviceRadius: serviceRadius || undefined,
-                    city: city || undefined
-                }
+                $set: updateObj
             },
             { new: true }
         );
@@ -271,7 +281,7 @@ router.put('/update-location', auth, isWorker, async (req, res) => {
                 $set: {
                     location: {
                         type: 'Point',
-                        coordinates: [longitude, latitude] // GeoJSON format: [longitude, latitude]
+                        coordinates: [parseFloat(longitude), parseFloat(latitude)] // Ensure correct order and conversion
                     }
                 }
             },
@@ -355,23 +365,19 @@ router.get('/nearby-jobs', auth, isWorker, async (req, res) => {
         // Create query to find nearby jobs
         const query = {
             status: 'pending',
-            worker: { $exists: false }
-        };
-
-        // Set search radius (with fallback)
-        const searchRadius = worker.serviceRadius || 50;
-        
-        // Add location filter
-        query.location = {
-            $nearSphere: {
-                $geometry: worker.location,
-                $maxDistance: searchRadius * 1000 // Convert km to meters
+            worker: { $exists: false },
+            location: {
+                $nearSphere: {
+                    $geometry: worker.location,
+                    $maxDistance: (worker.serviceRadius || 100) * 1000 // Convert km to meters
+                }
             }
         };
 
-        // Add skills/category filter if worker has specific skills
-        if (worker.skills && worker.skills.length > 0 && !worker.skills.includes('general')) {
-            query.category = { $in: worker.skills };
+        // If worker has valid categories (not just 'general'), filter by them
+        if (worker.categories && worker.categories.length > 0 &&
+            !(worker.categories.length === 1 && worker.categories.includes('general'))) {
+            query.category = { $in: worker.categories };
         }
 
         console.log('Job query:', JSON.stringify(query));

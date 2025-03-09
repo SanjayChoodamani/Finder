@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { X, Mail, Lock, User, Phone, MapPin, Briefcase, Calendar, Map, Eye, EyeOff } from 'lucide-react';
 
@@ -232,6 +232,8 @@ export const RegisterModal = ({ isOpen, onClose, onSuccess }) => {
         experience: ''
     });
     const [errors, setErrors] = useState({});
+    const [isLocating, setIsLocating] = useState(false);
+    const [geoError, setGeoError] = useState('');
 
     const totalSteps = userType === 'worker' ? 3 : 2;
 
@@ -340,6 +342,16 @@ export const RegisterModal = ({ isOpen, onClose, onSuccess }) => {
             ))}
         </div>
     );
+
+    useEffect(() => {
+        // Clear coordinates when city input changes
+        setFormData(prev => ({
+            ...prev,
+            cityLatitude: '',
+            cityLongitude: ''
+        }));
+        setGeoError('');
+    }, [formData.city]);
 
     const renderStepContent = () => {
         switch (currentStep) {
@@ -585,7 +597,12 @@ export const RegisterModal = ({ isOpen, onClose, onSuccess }) => {
                             </div>
                             <button
                                 type="button"
+                                disabled={isLocating || !formData.city.trim()}
                                 onClick={async () => {
+                                    // Clear previous state
+                                    setGeoError('');
+                                    setIsLocating(true);
+                                    
                                     try {
                                         const apiKey = import.meta.env.VITE_REACT_APP_GOOGLE_MAPS_API_KEY;
                                         const response = await fetch(
@@ -593,7 +610,7 @@ export const RegisterModal = ({ isOpen, onClose, onSuccess }) => {
                                         );
                                         const data = await response.json();
 
-                                        if (data.status === 'OK' && data.results[0]) {
+                                        if (data.status === 'OK' && data.results && data.results[0]) {
                                             const { lat, lng } = data.results[0].geometry.location;
                                             setFormData({
                                                 ...formData,
@@ -601,17 +618,44 @@ export const RegisterModal = ({ isOpen, onClose, onSuccess }) => {
                                                 cityLongitude: lng,
                                                 city: data.results[0].formatted_address
                                             });
+                                        } else {
+                                            // Handle various Google API status codes
+                                            switch (data.status) {
+                                                case 'ZERO_RESULTS':
+                                                    setGeoError('No location found with that name. Please try a different city name.');
+                                                    break;
+                                                case 'OVER_QUERY_LIMIT':
+                                                    setGeoError('Too many requests. Please try again later.');
+                                                    break;
+                                                case 'REQUEST_DENIED':
+                                                    setGeoError('Location request denied. Please check API key configuration.');
+                                                    break;
+                                                default:
+                                                    setGeoError(`Geocoding error: ${data.status || 'Unknown error'}`);
+                                            }
                                         }
                                     } catch (error) {
                                         console.error('Error fetching coordinates:', error);
+                                        setGeoError('Network error. Please check your connection and try again.');
+                                    } finally {
+                                        setIsLocating(false);
                                     }
                                 }}
-                                className="inline-flex items-center text-[#133E87] text-sm hover:underline mt-1 bg-[#133E87]/5 px-3 py-1.5 rounded"
+                                className={`inline-flex items-center text-[#133E87] text-sm hover:underline mt-1 bg-[#133E87]/5 px-3 py-1.5 rounded ${!formData.city.trim() ? 'opacity-50 cursor-not-allowed' : ''}`}
                             >
-                                <Map size={14} className="mr-1.5" />
-                                Verify City
+                                {isLocating ? (
+                                    <>
+                                        <div className="h-3 w-3 rounded-full border-2 border-t-transparent border-[#133E87] animate-spin mr-2"></div>
+                                        Verifying...
+                                    </>
+                                ) : (
+                                    <>
+                                        <Map size={14} className="mr-1.5" />
+                                        Verify City
+                                    </>
+                                )}
                             </button>
-                            {formData.cityLatitude && formData.cityLongitude && (
+                            {formData.cityLatitude && formData.cityLongitude && !isLocating && (
                                 <p className="text-green-600 text-sm flex items-center">
                                     <svg className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
@@ -619,7 +663,15 @@ export const RegisterModal = ({ isOpen, onClose, onSuccess }) => {
                                     City verified successfully
                                 </p>
                             )}
-                            {errors.city && <p className="mt-1 text-red-500 text-sm">{errors.city}</p>}
+                            {geoError && (
+                                <p className="text-red-500 text-sm flex items-center">
+                                    <svg className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                    </svg>
+                                    {geoError}
+                                </p>
+                            )}
+                            {errors.city && !geoError && <p className="mt-1 text-red-500 text-sm">{errors.city}</p>}
                         </div>
                     </div>
                 );

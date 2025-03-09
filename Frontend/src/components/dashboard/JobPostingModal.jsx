@@ -206,28 +206,21 @@ const JobPostingModal = ({ isOpen, onClose, onSuccess }) => {
                 throw new Error('Valid location coordinates are required');
             }
 
-            const formDataToSend = new FormData();
-            formDataToSend.append('title', formData.title);
-            formDataToSend.append('description', formData.description);
-            formDataToSend.append('category', formData.category);
-            formDataToSend.append('address', formData.location);
-            formDataToSend.append('latitude', formData.latitude);
-            formDataToSend.append('longitude', formData.longitude);
-            formDataToSend.append('budget', formData.budget);
-            formDataToSend.append('deadline', formData.deadline);
-            formDataToSend.append('timeStart', formData.timeStart);
-            formDataToSend.append('timeEnd', formData.timeEnd);
-
-            formData.images.forEach((img) => {
-                formDataToSend.append('images', img.file);
-            });
+            const payload = {
+                ...formData,
+                address: formData.location, // Added to satisfy backend job validation
+                category: formData.category || formData.categorySearch,
+                latitude: formData.latitude.toString(),
+                longitude: formData.longitude.toString()
+            };
 
             const response = await fetch('http://localhost:5000/api/jobs/create', {
                 method: 'POST',
                 headers: {
-                    'Authorization': `Bearer ${token}`
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json'
                 },
-                body: formDataToSend
+                body: JSON.stringify(payload)
             });
 
             if (!response.ok) {

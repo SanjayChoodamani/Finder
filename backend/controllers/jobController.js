@@ -2,8 +2,11 @@ const Job = require('../models/Job');
 const User = require('../models/User');
 const Worker = require('../models/Worker');
 const ErrorResponse = require('../utils/errorResponse');
-const { sendNotificationToNearbyWorkers } = require('../utils/notifications');
+const { sendNotificationsToMatchingWorkers } = require('../utils/notifications');
 const mongoose = require('mongoose');
+
+// Remove the old notifyMatchingWorkers function as we're replacing it
+// with our improved version from notifications.js
 
 // Create a new job
 exports.createJob = async (req, res, next) => {
@@ -56,8 +59,8 @@ exports.createJob = async (req, res, next) => {
         const job = new Job(jobData);
         await job.save();
 
-        // Send notifications to nearby workers
-        await sendNotificationToNearbyWorkers(job);
+        // Send notifications to workers with matching skills
+        await sendNotificationsToMatchingWorkers(job);
 
         res.status(201).json({
             success: true,
@@ -76,7 +79,12 @@ exports.getCategories = async (req, res, next) => {
         const categories = new Set();
         
         workers.forEach(worker => {
-            worker.skills.forEach(skill => categories.add(skill.toLowerCase()));
+            if (worker.skills && Array.isArray(worker.skills)) {
+                worker.skills.forEach(skill => categories.add(skill.toLowerCase().trim()));
+            }
+            if (worker.categories && Array.isArray(worker.categories)) {
+                worker.categories.forEach(category => categories.add(category.toLowerCase().trim()));
+            }
         });
         
         // Add default categories

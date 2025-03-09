@@ -10,55 +10,34 @@ if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
     );
 }
 
-const sendNotificationToNearbyWorkers = async (job) => {
+const sendNotificationsToMatchingWorkers = async (job) => {
     try {
         console.log(`Finding workers for new job: ${job.title} (${job._id})`);
         
-        // Ensure job has location and category
-        if (!job.location || !job.category) {
-            console.error('Job is missing location or category, cannot send notifications');
+        // Ensure job has category
+        if (!job.category) {
+            console.error('Job is missing category, cannot send notifications');
             return;
         }
 
-        console.log(`Job location: ${JSON.stringify(job.location)}, category: ${job.category}`);
+        console.log(`Looking for workers with skills matching: ${job.category}`);
         
-        // Find workers within radius who have the required category/skill
-        // Don't use $near if coordinates are invalid
-        let query = {
+        // Find all workers who have the required category/skill, regardless of location
+        const matchingWorkers = await Worker.find({
             $or: [
-                { skills: { $in: [job.category.toLowerCase()] } },
-                { categories: { $in: [job.category.toLowerCase()] } }
+                { skills: { $in: [new RegExp(job.category, 'i')] } },
+                { categories: { $in: [new RegExp(job.category, 'i')] } }
             ]
-        };
+        });
         
-        // Only add location query if coordinates are valid
-        if (job.location && 
-            job.location.coordinates && 
-            job.location.coordinates.length === 2 &&
-            job.location.coordinates[0] !== 0) {
-            
-            query.location = {
-                $near: {
-                    $geometry: job.location,
-                    $maxDistance: (job.radius || 10) * 1000 // Convert km to meters
-                }
-            };
-            console.log('Using geo query with valid coordinates');
-        } else {
-            console.log('Invalid job coordinates, skipping geo query');
-        }
-        
-        console.log('Worker query:', JSON.stringify(query));
-        const nearbyWorkers = await Worker.find(query);
-        
-        console.log(`Found ${nearbyWorkers.length} nearby workers for job ${job._id}`);
+        console.log(`Found ${matchingWorkers.length} workers with matching skills for job ${job._id}`);
 
-        if (nearbyWorkers.length === 0) {
+        if (matchingWorkers.length === 0) {
             return;
         }
         
         // Create a notification for each worker
-        const notifications = nearbyWorkers.map(async (worker) => {
+        const notifications = matchingWorkers.map(async (worker) => {
             try {
                 // Create notification object with timestamp
                 const notification = {
@@ -99,11 +78,14 @@ const sendNotificationToNearbyWorkers = async (job) => {
         });
         
         await Promise.all(notifications);
+        console.log(`Successfully sent notifications to all ${matchingWorkers.length} matching workers`);
     } catch (error) {
         console.error('Error sending notifications:', error);
     }
 };
 
 module.exports = {
-    sendNotificationToNearbyWorkers
+    sendNotificationsToMatchingWorkers,
+    // Keep the old function name for backwards compatibility
+    sendNotificationToNearbyWorkers: sendNotificationsToMatchingWorkers
 };

@@ -6,7 +6,7 @@ const upload = require('../middleware/upload');
 const Job = require('../models/Job');
 const User = require('../models/User'); 
 const Worker = require('../models/Worker'); 
-const { sendNotificationToNearbyWorkers } = require('../utils/notifications');
+const { sendNotificationsToMatchingWorkers } = require('../utils/notifications');
 
 // Create a new job
 router.post('/create', auth, upload.array('images', 5), async (req, res) => {
@@ -59,9 +59,9 @@ router.post('/create', auth, upload.array('images', 5), async (req, res) => {
         const job = new Job(jobData);
         await job.save();
 
-        // Send notifications to nearby workers
+        // Send notifications to workers with matching skills
         console.log('Sending notifications for new job:', job._id);
-        await sendNotificationToNearbyWorkers(job);
+        await sendNotificationsToMatchingWorkers(job);
         console.log('Notifications sent successfully');
 
         res.status(201).json(job);

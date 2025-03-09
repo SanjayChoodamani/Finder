@@ -191,7 +191,10 @@ exports.updateWorkerProfile = async (req, res, next) => {
         
         // Build update object
         const updateData = {};
-        if (skills && Array.isArray(skills)) updateData.skills = skills;
+        if (skills && Array.isArray(skills)) {
+            updateData.skills = skills.map(skill => skill.toLowerCase().trim());
+            // The Worker model's pre-save hook will handle setting categories based on skills
+        }
         if (serviceRadius) updateData.serviceRadius = serviceRadius;
         if (city) updateData.city = city;
         if (cityLatitude && cityLongitude) {

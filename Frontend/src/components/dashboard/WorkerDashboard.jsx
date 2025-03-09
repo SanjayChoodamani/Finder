@@ -215,8 +215,8 @@ const WorkerDashboard = () => {
             const token = localStorage.getItem('token');
 
             console.log('Fetching nearby jobs...');
-
-            const response = await fetch('http://localhost:5000/api/jobs/nearby', {
+            // Updated URL to point directly to the worker endpoint
+            const response = await fetch('http://localhost:5000/api/worker/nearby-jobs', {
                 method: 'GET',
                 headers: {
                     'Authorization': `Bearer ${token}`,
@@ -228,17 +228,15 @@ const WorkerDashboard = () => {
 
             console.log('Nearby jobs response:', data);
 
-            if (Array.isArray(data)) {
-                setNearbyJobs(data);
-                console.log(`Found ${data.length} nearby jobs`);
-
-                // Log each job for debugging
-                data.forEach((job, index) => {
+            if (data && Array.isArray(data.data)) {
+                setNearbyJobs(data.data);
+                console.log(`Found ${data.data.length} nearby jobs`);
+                data.data.forEach((job, index) => {
                     console.log(`Job ${index + 1}:`, {
                         id: job._id,
                         title: job.title,
                         category: job.category,
-                        location: job.approximateLocation || 'No location'
+                        approxLocation: job.approximateLocation || 'No location'
                     });
                 });
             } else {
@@ -247,7 +245,6 @@ const WorkerDashboard = () => {
             }
         } catch (error) {
             console.error('Error fetching nearby jobs:', error);
-            // Don't set error state, just set empty jobs
             setNearbyJobs([]);
         } finally {
             setDashboardLoading(prev => ({ ...prev, nearbyJobs: false }));

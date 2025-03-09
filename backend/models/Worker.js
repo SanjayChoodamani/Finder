@@ -58,7 +58,25 @@ const workerSchema = new mongoose.Schema({
     completedJobs: {
         type: Number,
         default: 0
-    }
+    },
+    categories: [{
+        type: String,
+        enum: [
+            'plumbing',
+            'electrical',
+            'carpentry',
+            'painting',
+            'cleaning',
+            'gardening',
+            'moving',
+            'appliance_repair',
+            'hvac',
+            'roofing',
+            'other',
+            'general'
+        ],
+        default: ['general']
+    }]
 });
 
 // Add geospatial index - this is critical for location queries
@@ -70,6 +88,17 @@ workerSchema.pre('save', function(next) {
         this.location.coordinates = this.location.coordinates.map(coord => 
             typeof coord === 'string' ? parseFloat(coord) : coord
         );
+    }
+    if ((!this.categories || this.categories.length === 0) && this.skills && this.skills.length > 0) {
+        // Map each skill to a valid category or 'general'
+        const validCategories = [
+            'plumbing','electrical','carpentry','painting','cleaning','gardening',
+            'moving','appliance_repair','hvac','roofing','other'
+        ];
+        this.categories = this.skills.map(skill => {
+            const match = validCategories.find(cat => cat.toLowerCase() === skill.toLowerCase());
+            return match || 'general';
+        });
     }
     next();
 });
