@@ -4,9 +4,7 @@ const Worker = require('../models/Worker');
 const ErrorResponse = require('../utils/errorResponse');
 const { sendNotificationsToMatchingWorkers } = require('../utils/notifications');
 const mongoose = require('mongoose');
-
-// Remove the old notifyMatchingWorkers function as we're replacing it
-// with our improved version from notifications.js
+const { validateCoordinates, logLocationInfo } = require('../utils/locationUtils');
 
 // Create a new job
 exports.createJob = async (req, res, next) => {
@@ -28,26 +26,23 @@ exports.createJob = async (req, res, next) => {
             timeEnd
         } = req.body;
 
-        // Create location object
-        const location = {
-            type: 'Point',
-            coordinates: [
-                parseFloat(longitude),
-                parseFloat(latitude)
-            ]
-        };
+        // Create location object with validation
+        const locationObj = validateCoordinates(latitude, longitude);
 
         // Validate coordinates
-        if (!location.coordinates[0] || !location.coordinates[1]) {
-            return next(new ErrorResponse('Invalid coordinates', 400));
+        if (!locationObj) {
+            return next(new ErrorResponse('Invalid coordinates. Please provide valid latitude and longitude.', 400));
         }
+
+        // Log for debugging
+        logLocationInfo(`Creating job with location`, locationObj);
 
         const jobData = {
             title,
             description,
             category,
             address,
-            location,
+            location: locationObj,
             budget: parseFloat(budget),
             deadline: new Date(deadline),
             timeStart,

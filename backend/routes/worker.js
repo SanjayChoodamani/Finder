@@ -4,6 +4,7 @@ const auth = require('../middleware/auth');
 const Worker = require('../models/Worker');
 const Job = require('../models/Job'); // Move import to top
 const mongoose = require('mongoose');
+const { validateCoordinates, calculateDistance, logLocationInfo } = require('../utils/locationUtils');
 
 // Middleware to check if user is a worker
 const isWorker = (req, res, next) => {
@@ -268,23 +269,23 @@ router.put('/update-location', auth, isWorker, async (req, res) => {
     try {
         const { latitude, longitude } = req.body;
         
-        if (!latitude || !longitude) {
+        // Validate coordinates using our utility function
+        const locationObj = validateCoordinates(latitude, longitude);
+        
+        if (!locationObj) {
             return res.status(400).json({ 
                 success: false,
-                message: 'Latitude and longitude are required' 
+                message: 'Invalid coordinates. Latitude must be between -90 and 90, longitude between -180 and 180.' 
             });
         }
         
+        // Log before update for debugging
+        console.log(`Updating worker ${req.user._id} location to:`, 
+                   `lat=${latitude}, lng=${longitude}`);
+        
         const worker = await Worker.findOneAndUpdate(
             { user: req.user._id },
-            {
-                $set: {
-                    location: {
-                        type: 'Point',
-                        coordinates: [parseFloat(longitude), parseFloat(latitude)] // Ensure correct order and conversion
-                    }
-                }
-            },
+            { $set: { location: locationObj } },
             { new: true }
         );
 
@@ -294,11 +295,20 @@ router.put('/update-location', auth, isWorker, async (req, res) => {
                 message: 'Worker profile not found' 
             });
         }
+        
+        // Log after update for verification
+        logLocationInfo('Worker location updated successfully', worker.location);
 
         res.json({
             success: true,
             message: 'Worker location updated successfully',
-            data: worker
+            data: {
+                location: worker.location,
+                coordinates: {
+                    latitude: worker.location.coordinates[1],  // Convert back for client
+                    longitude: worker.location.coordinates[0]
+                }
+            }
         });
     } catch (error) {
         console.error('Error updating worker location:', error);
@@ -347,7 +357,8 @@ router.get('/nearby-jobs', auth, isWorker, async (req, res) => {
             });
         }
 
-        console.log(`Found worker: ${worker._id}, registered location:`, worker.location);
+        // Log worker location for debugging
+        logLocationInfo(`Found worker ${worker._id}, registered location`, worker.location);
 
         // Ensure worker has a valid registered location
         if (!worker.location || 
@@ -399,23 +410,12 @@ router.get('/nearby-jobs', auth, isWorker, async (req, res) => {
                 ? addressParts.slice(1).join(',').trim()
                 : job.address;
                 
-            // Calculate distance from worker (in km)
+            // Calculate distance from worker using our utility
             if (job.location && job.location.coordinates) {
-                const workerLat = worker.location.coordinates[1];
-                const workerLng = worker.location.coordinates[0];
-                const jobLat = job.location.coordinates[1];
-                const jobLng = job.location.coordinates[0];
-                
-                // Haversine formula - approximate distance calculation
-                const R = 6371; // Earth's radius in km
-                const dLat = (jobLat - workerLat) * Math.PI / 180;
-                const dLon = (jobLng - workerLng) * Math.PI / 180;
-                const a = 
-                    Math.sin(dLat/2) * Math.sin(dLat/2) +
-                    Math.cos(workerLat * Math.PI / 180) * Math.cos(jobLat * Math.PI / 180) * 
-                    Math.sin(dLon/2) * Math.sin(dLon/2); 
-                const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)); 
-                jobObj.distance = Math.round((R * c) * 10) / 10; // Distance in km, rounded to 1 decimal
+                jobObj.distance = calculateDistance(
+                    worker.location.coordinates,
+                    job.location.coordinates
+                );
             }
             
             // Don't send exact coordinates to frontend until job is accepted
@@ -463,6 +463,35 @@ router.get('/profile', auth, isWorker, async (req, res) => {
             message: 'Failed to get worker profile',
             error: error.message
         });
+    }
+});
+
+// Get all categories
+router.get('/categories', auth, isWorker, async (req, res) => {
+    try {
+        const workers = await Worker.find({});
+        const categories = new Set();
+        
+        workers.forEach(worker => {
+            if (worker.skills && Array.isArray(worker.skills)) {
+                worker.skills.forEach(skill => categories.add(skill.toLowerCase().trim()));
+            }
+            if (worker.categories && Array.isArray(worker.categories)) {
+                worker.categories.forEach(category => categories.add(category.toLowerCase().trim()));
+            }
+        });
+        
+        const defaultCategories = [
+            'plumbing', 'electrical', 'carpentry', 'painting',
+            'cleaning', 'gardening', 'moving', 'appliance_repair',
+            'hvac', 'roofing', 'other'
+        ];
+        
+        defaultCategories.forEach(cat => categories.add(cat));
+        
+        res.status(200).json(Array.from(categories));
+    } catch (error) {
+        res.status(500).json({ message: error.message });
     }
 });
 

@@ -4,6 +4,7 @@ import { Bell, LogOut, Settings, User, X, MapPin } from 'lucide-react';
 import NotificationPanel from './NotificationPanel';
 import ActiveJobsList from './ActiveJobsList';
 import JobCard from './JobCard';
+import { getCurrentLocation, updateWorkerLocation } from '../../utils/location';
 
 const WorkerDashboard = () => {
     const [user, setUser] = useState(null);
@@ -16,6 +17,7 @@ const WorkerDashboard = () => {
     const dropdownRef = useRef(null);
     const [nearbyJobs, setNearbyJobs] = useState([]);
     const [pushEnabled, setPushEnabled] = useState(false);
+    const [categories, setCategories] = useState([]);
 
     // Add loading states
     const [dashboardLoading, setDashboardLoading] = useState({
@@ -25,9 +27,14 @@ const WorkerDashboard = () => {
         notifications: true
     });
 
+    // Add state for tracking location updates
+    const [locationUpdating, setLocationUpdating] = useState(false);
+    const [locationError, setLocationError] = useState(null);
+
     useEffect(() => {
         // Initialize everything at once
         initializeDashboard();
+        fetchCategories();
 
         // Set up click outside handler for dropdown
         const handleClickOutside = (event) => {
@@ -47,6 +54,14 @@ const WorkerDashboard = () => {
 
             // First fetch essential user data
             await fetchUserData();
+
+            // Try to update worker location if possible
+            try {
+                await updateCurrentLocation();
+            } catch (locError) {
+                console.warn('Location update failed:', locError);
+                // Non-critical, continue loading the dashboard
+            }
 
             // Then fetch other data in parallel, but handle failures gracefully
             const results = await Promise.allSettled([
@@ -251,6 +266,25 @@ const WorkerDashboard = () => {
         }
     };
 
+    const fetchCategories = async () => {
+        try {
+            const token = localStorage.getItem('token');
+            const response = await fetch('http://localhost:5000/api/worker/categories', {
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+            if (response.ok) {
+                const data = await response.json();
+                setCategories(data);
+            } else {
+                throw new Error('Failed to fetch categories');
+            }
+        } catch (error) {
+            console.error('Error fetching categories:', error);
+        }
+    };
+
     useEffect(() => {
         // Log nearby jobs for debugging
         if (nearbyJobs.length > 0) {
@@ -385,6 +419,32 @@ const WorkerDashboard = () => {
             fetchNotifications();
         } catch (error) {
             console.error('Error marking notification as read:', error);
+        }
+    };
+
+    // Function to update worker location
+    const updateCurrentLocation = async () => {
+        try {
+            setLocationUpdating(true);
+            setLocationError(null);
+            
+            console.log('Getting current location...');
+            const position = await getCurrentLocation();
+            const { latitude, longitude } = position.coords;
+            
+            console.log(`Updating worker location: lat=${latitude}, lng=${longitude}`);
+            await updateWorkerLocation(latitude, longitude);
+            
+            // Location updated successfully, fetch nearby jobs with new location
+            await fetchNearbyJobs();
+            
+            return true;
+        } catch (error) {
+            console.error('Error updating worker location:', error);
+            setLocationError(error.message || 'Failed to update location');
+            return false;
+        } finally {
+            setLocationUpdating(false);
         }
     };
 
@@ -551,6 +611,25 @@ const WorkerDashboard = () => {
                         </div>
                     </div>
                 </div>
+
+                {/* Add this near the worker stats section */}
+                <div className="flex justify-end mb-4">
+                    <button
+                        onClick={updateCurrentLocation}
+                        disabled={locationUpdating}
+                        className="flex items-center px-4 py-2 text-sm bg-white border border-gray-300 rounded-md shadow-sm hover:bg-gray-50"
+                    >
+                        <MapPin className="w-4 h-4 mr-2" />
+                        {locationUpdating ? 'Updating Location...' : 'Update My Location'}
+                    </button>
+                </div>
+
+                {locationError && (
+                    <div className="mb-4 p-3 bg-red-50 text-red-700 rounded-md">
+                        <p className="text-sm">{locationError}</p>
+                        <p className="text-xs mt-1">You may need to enable location services in your browser.</p>
+                    </div>
+                )}
 
                 {/* Jobs Sections */}
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">

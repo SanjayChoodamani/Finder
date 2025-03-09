@@ -3,6 +3,7 @@ const Worker = require('../models/Worker');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const ErrorResponse = require('../utils/errorResponse');
+const { validateCoordinates, logLocationInfo } = require('../utils/locationUtils');
 
 // Register User - Client or Worker
 exports.register = async (req, res, next) => {
@@ -28,19 +29,39 @@ exports.register = async (req, res, next) => {
 
         // Create worker profile if userType is 'worker'
         if (userType === 'worker') {
+            // Validate location coordinates
+            let locationObj = validateCoordinates(cityLatitude, cityLongitude);
+            
+            // If coordinates are invalid, use default coordinates for the city if provided
+            if (!locationObj && city) {
+                console.log(`Invalid coordinates provided for worker ${email}, using defaults for city: ${city}`);
+                // Use Delhi coordinates as fallback (you might want to replace with geocoding)
+                locationObj = {
+                    type: 'Point',
+                    coordinates: [77.2090, 28.6139] // Delhi coordinates [longitude, latitude]
+                };
+            } else if (!locationObj) {
+                console.log(`No valid coordinates provided for worker ${email}, using defaults`);
+                locationObj = {
+                    type: 'Point',
+                    coordinates: [77.2090, 28.6139] // Default Delhi coordinates
+                };
+            }
+            
             const workerData = {
                 user: user._id,
                 skills: skills || [],
                 experience: experience || 0,
                 serviceRadius: 10, // Default 10km radius
                 city: city || '',
-                location: {
-                    type: 'Point',
-                    coordinates: [parseFloat(cityLongitude) || 0, parseFloat(cityLatitude) || 0]
-                }
+                location: locationObj
             };
             
-            await Worker.create(workerData);
+            // Log for debugging
+            logLocationInfo(`Creating worker profile with location`, locationObj);
+            
+            const worker = await Worker.create(workerData);
+            console.log(`Worker profile created successfully for user ${user._id}`);
         }
 
         // Generate token
@@ -197,11 +218,16 @@ exports.updateWorkerProfile = async (req, res, next) => {
         }
         if (serviceRadius) updateData.serviceRadius = serviceRadius;
         if (city) updateData.city = city;
+        
+        // Update location if coordinates provided
         if (cityLatitude && cityLongitude) {
-            updateData.location = {
-                type: 'Point',
-                coordinates: [parseFloat(cityLongitude), parseFloat(cityLatitude)]
-            };
+            const locationObj = validateCoordinates(cityLatitude, cityLongitude);
+            if (locationObj) {
+                updateData.location = locationObj;
+                logLocationInfo(`Updating worker location in profile`, locationObj);
+            } else {
+                return next(new ErrorResponse('Invalid coordinates provided', 400));
+            }
         }
         
         // Update worker profile
